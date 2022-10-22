@@ -1,0 +1,21 @@
+package com.sample.epe.outbound.models;
+
+import com.sample.epe.outbound.models.output.WriterMessage;
+import java.util.Set;
+import lombok.Data;
+
+
+@Data
+public class MockTestResult {
+   public WriterMessage writerMessage;
+   public Set<String> universalIds;
+   public Set<String> objectIds;
+   public Set<String> fields;
+
+   public MockTestResult(WriterMessage writerMessage, Set<String> universalIds, Set<String> fields,Set<String> objectIds) {
+     this.writerMessage = writerMessage;
+     this.universalIds = universalIds;
+     this.fields = fields;
+     this.objectIds = objectIds;
+   }
+}
