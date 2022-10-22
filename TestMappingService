@@ -1,0 +1,166 @@
+package com.sample.epe.services.internal;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sample.epe.models.enums.SystemName;
+import com.sample.epe.models.internal.DataDetail;
+import com.sample.epe.models.sql.FieldMappingRow;
+import com.sample.epe.models.sql.FieldMappingKey;
+import com.sample.epe.models.sql.ObjectNameKey;
+import com.sample.epe.models.sql.EnumKey;
+import com.sample.epe.models.sql.EnumValue;
+import com.sample.epe.models.sql.EnumsRow;
+import com.sample.epe.services.Internal.MappingService;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+
+public class TestMappingService {
+
+  private static Map<FieldMappingKey, List<FieldMappingRow>> _fieldMappings;
+  private static Map<ObjectNameKey, Set<String>> _objectNameMappings;
+  private static Map<EnumKey, String> _EnumKey;
+  private static Map<EnumValue, String> _EnumValue;
+  private static ObjectMapper _mapper = new ObjectMapper();
+  private static MappingService _mappingService;
+
+  @BeforeAll
+  public static void setUp() throws IOException {
+    String fieldMappingRowsJson = new String(Files.readAllBytes(Paths.get("src/test/resources/general/FieldMappingRows.json")));
+    TypeReference<List<FieldMappingRow>> typeReferenceFMRows = new TypeReference<List<FieldMappingRow>>() {};
+    List<FieldMappingRow> fieldMappingRows = _mapper.readValue(fieldMappingRowsJson, typeReferenceFMRows);
+
+    _fieldMappings = new HashMap<>();
+    fieldMappingRows.forEach(fieldMappingRow -> {
+      FieldMappingKey key = new FieldMappingKey(fieldMappingRow.getSystemSource(),
+          fieldMappingRow.getSystemSourceObjectName(), fieldMappingRow.getSystemSink());
+      List<FieldMappingRow> mappings = _fieldMappings.getOrDefault(key, new ArrayList<>());
+      mappings.add(fieldMappingRow);
+      _fieldMappings.put(key, mappings);
+    });
+
+    _objectNameMappings = new HashMap<>();
+    fieldMappingRows.forEach(fieldMappingRow -> {
+      ObjectNameKey key = new ObjectNameKey(fieldMappingRow.getSystemSource(),
+          fieldMappingRow.getSystemSourceObjectName(), fieldMappingRow.getSystemSink());
+      Set<String> sinkObjectNames = _objectNameMappings.getOrDefault(key, new HashSet<>());
+      sinkObjectNames.add(fieldMappingRow.getSystemSinkObjectName());
+      _objectNameMappings.put(key, sinkObjectNames);
+    });
+
+    String EnumsRowsJson = new String(Files.readAllBytes(Paths.get("src/test/resources/general/EnumsRows.json")));
+    TypeReference<List<EnumsRow>> typeReferenceVERows = new TypeReference<List<EnumsRow>>() {};
+    List<EnumsRow> EnumsRows = _mapper.readValue(EnumsRowsJson, typeReferenceVERows);
+
+    _EnumKey = new HashMap<>();
+    EnumsRows.forEach(EnumsRow -> {
+      EnumKey key = new EnumKey(EnumsRow.getSystemName(), EnumsRow.getObjectName(),
+          EnumsRow.getFieldName(), EnumsRow.getEnumValue());
+      _EnumKey.put(key, EnumsRow.getEnumKey());
+    });
+    _EnumValue = new HashMap<>();
+    EnumsRows.forEach(EnumsRow -> {
+      EnumValue key = new EnumValue(EnumsRow.getSystemName(), EnumsRow.getObjectName(),
+          EnumsRow.getFieldName(),EnumsRow.getEnumKey());
+      _EnumValue.put(key, EnumsRow.getEnumValue());
+    });
+
+    _mappingService = new MappingService(_fieldMappings,
+        _objectNameMappings,
+        _EnumKey,
+        _EnumValue);
+  }
+
+  @Test
+  public void testGetKeyEquivalent(){
+    List<DataDetail> dataDetails = _mappingService.getKeyEquivalent(SystemName.DYNAMICS, "Account",
+        "in_ship_to_address", SystemName.SALESLOFT);
+    Assertions.assertTrue(dataDetails != null && dataDetails.size() == 5);
+  }
+
+  @Test
+  public void testGetKeyEquivalent_Negative(){
+    List<DataDetail> dataDetails = _mappingService.getKeyEquivalent(SystemName.DYNAMICS, "Account",
+        "INVALID", SystemName.SALESLOFT);
+    Assertions.assertTrue(dataDetails != null && dataDetails.isEmpty());
+  }
+
+  @Test
+  public void testGetValueEquivalent(){
+    List<DataDetail> dataDetails = _mappingService.getValueEquivalent(SystemName.DYNAMICS, "Account",
+        "in_tier", "876030000", SystemName.SALESLOFT);
+
+    Assertions.assertTrue(dataDetails != null && dataDetails.size() == 1
+        && dataDetails.get(0).getKey().equalsIgnoreCase("account_tier_id")
+        && dataDetails.get(0).getValue().equalsIgnoreCase("9518"));
+  }
+
+  @Test
+  public void testGetValueEquivalent_Negative(){
+    List<DataDetail> dataDetails = _mappingService.getValueEquivalent(SystemName.DYNAMICS, "Account",
+        "in_tier", "INVALID", SystemName.SALESLOFT);
+    Assertions.assertTrue(dataDetails != null && dataDetails.size() == 1
+        && dataDetails.get(0).getKey().equalsIgnoreCase("account_tier_id")
+        && dataDetails.get(0).getValue().equalsIgnoreCase("INVALID"));
+  }
+
+  @Test
+  public void testGetValueEquivalent_NullValue(){
+    List<DataDetail> dataDetails = _mappingService.getValueEquivalent(SystemName.DYNAMICS, "Account",
+        "in_tier", null, SystemName.SALESLOFT);
+    Assertions.assertTrue(dataDetails != null && dataDetails.size() == 1
+        && dataDetails.get(0).getKey().equalsIgnoreCase("account_tier_id")
+        && dataDetails.get(0).getValue() == null);
+  }
+
+  @Test
+  public void testGetUniqueObjectEquivalent(){
+    String sinkObject = _mappingService.getUniqueObjectEquivalent(SystemName.DYNAMICS, SystemName.SALESLOFT, "Account");
+    Assertions.assertTrue(sinkObject != null && sinkObject.equals("Account"));
+  }
+
+  @Test
+  public void testGetUniqueObjectEquivalent_Negative(){
+    String sinkObject = _mappingService.getUniqueObjectEquivalent(SystemName.SALESLOFT, SystemName.DYNAMICS, "Person");
+    Assertions.assertTrue(sinkObject == null);
+  }
+
+  @Test
+  public void testGetUniqueObjectEquivalent_INVLAID(){
+    String sinkObject = _mappingService.getUniqueObjectEquivalent(SystemName.SALESLOFT, SystemName.DYNAMICS, "INVALID");
+    Assertions.assertTrue(sinkObject == null);
+  }
+
+  @Test
+  public void testGetObjectEquivalent(){
+    List<String> sinkObjects = _mappingService.getObjectEquivalent(SystemName.DYNAMICS, SystemName.SALESLOFT, "Account");
+    Assertions.assertTrue(sinkObjects != null && sinkObjects.size() == 1 && sinkObjects.get(0).equals("Account"));
+  }
+
+  @Test
+  public void testGetObjectEquivalent_INVALID(){
+    List<String> sinkObjects = _mappingService.getObjectEquivalent(SystemName.DYNAMICS, SystemName.SALESLOFT, "INVLAID");
+    Assertions.assertTrue(sinkObjects != null && sinkObjects.isEmpty());
+  }
+
+  @Test
+  public void testGetFieldList(){
+    List<String> fieldList = _mappingService.getFieldList(SystemName.DYNAMICS, SystemName.SALESLOFT, "Account");
+    Assertions.assertTrue(fieldList != null && !fieldList.isEmpty() && fieldList.size() == 16);
+  }
+
+  @Test
+  public void testGetFieldList_INVALID(){
+    List<String> fieldList = _mappingService.getFieldList(SystemName.DYNAMICS, SystemName.SALESLOFT, "INVALID");
+    Assertions.assertTrue(fieldList != null && fieldList.isEmpty());
+  }
+}
