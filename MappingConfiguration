@@ -1,0 +1,119 @@
+package com.sample.epe.sync.configurations;
+
+import com.sample.epe.sync.models.sql.FieldMappingKey;
+import com.sample.epe.sync.models.sql.FieldMappingRow;
+import com.sample.epe.sync.models.sql.ObjectNameKey;
+import com.sample.epe.sync.models.sql.EnumKey;
+import com.sample.epe.sync.models.sql.EnumValue;
+import com.sample.epe.sync.models.sql.EnumsRow;
+import com.sample.epe.sync.repository.FieldMappingRepo;
+import com.sample.epe.sync.repository.EnumsRepo;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+public class MappingConfiguration {
+
+  /**
+   *
+   * @param fieldMappingRepo
+   * @return Map<FieldMappingKey, List<FieldMappingRow>>
+   *
+   * This bean(method) read the static data from FieldMapping table in  DB and return a map where
+   * key is FieldMappingKey(combination of SourceSystem, SourceSystemObjectName, SinkSystem)
+   * Value is the List of FieldMappingRows for the above key.
+   */
+  @Bean
+  @Qualifier("FieldMapping")
+  public Map<FieldMappingKey, List<FieldMappingRow>> getFieldMapping(FieldMappingRepo fieldMappingRepo){
+    Collection<FieldMappingRow> fieldMappingRows = fieldMappingRepo.findAllMapping();
+    Map<FieldMappingKey, List<FieldMappingRow>> fieldMappings = new HashMap<>();
+    fieldMappingRows.forEach(fieldMappingRow -> {
+      FieldMappingKey key = new FieldMappingKey(fieldMappingRow.getSystemSource(), fieldMappingRow.getSystemSourceObjectName(),
+           fieldMappingRow.getSystemSink());
+      List<FieldMappingRow> mappings = fieldMappings.getOrDefault(key, new ArrayList<>());
+      mappings.add(fieldMappingRow);
+      fieldMappings.put(key, mappings);
+    });
+    return fieldMappings;
+  }
+
+  /**
+   *
+   * @param fieldMappingRepo
+   * @return Map<ObjectNameKey, Set<String>>
+   *
+   * This bean(method) read the static data from FieldMapping table in  DB and return a map where
+   * key is ObjectNameKey(combination of SourceSystem, SourceSystemObjectName, SinkSystem)
+   * Value is the Set of SinkSystemObjectName for the above key.
+   */
+  @Bean
+  @Qualifier("ObjectNameMapping")
+  public Map<ObjectNameKey, Set<String>> getObjectNameMapping(FieldMappingRepo fieldMappingRepo){
+    Collection<FieldMappingRow> fieldMappingRows = fieldMappingRepo.findAllMapping();
+    Map<ObjectNameKey, Set<String>> objectNameMapping = new HashMap<>();
+    fieldMappingRows.forEach(fieldMappingRow -> {
+      ObjectNameKey key = new ObjectNameKey(fieldMappingRow.getSystemSource(),
+          fieldMappingRow.getSystemSourceObjectName(), fieldMappingRow.getSystemSink());
+      Set<String> sinkObjectNames = objectNameMapping.getOrDefault(key, new HashSet<>());
+      sinkObjectNames.add(fieldMappingRow.getSystemSinkObjectName());
+      objectNameMapping.put(key, sinkObjectNames);
+    });
+    return objectNameMapping;
+  }
+
+  /**
+   *
+   * @param EnumsRepo
+   * @return Map<EnumKey, String>
+   *
+   * This bean(method) read the static data from Enums table in  DB and return a map where
+   * key is EnumKey(combination of SystemName, ObjectName, FieldName, EnumValue)
+   * Value is the Enum Key for the above Key.
+   */
+  @Bean
+  @Qualifier("EnumKey")
+  public Map<EnumKey, String> getEnumsKey(EnumsRepo EnumsRepo){
+    Collection<EnumsRow> EnumsRows = EnumsRepo.findAll();
+    Map<EnumKey, String> EnumKeyMap = new HashMap<>();
+
+    EnumsRows.forEach(EnumsRow -> {
+      EnumKey key = new EnumKey(EnumsRow.getSystemName(), EnumsRow.getObjectName(),
+          EnumsRow.getFieldName(), EnumsRow.getEnumValue());
+      EnumKeyMap.put(key, EnumsRow.getEnumKey());
+    });
+    return EnumKeyMap;
+  }
+
+  /**
+   *
+   * @param EnumsRepo
+   * @return Map<EnumValue, String>
+   *
+   * This bean(method) read the static data from Enums table in  DB and return a map where
+   * key is EnumValue(combination of SystemName, ObjectName, FieldName, EnumKey)
+   * Value is the Enum Value for the above Key.
+   */
+  @Bean
+  @Qualifier("EnumValue")
+  public Map<EnumValue, String> getEnumValue(EnumsRepo EnumsRepo){
+    Collection<EnumsRow> EnumsRows = EnumsRepo.findAll();
+    Map<EnumValue, String> EnumValueMap = new HashMap<>();
+
+    EnumsRows.forEach(EnumsRow -> {
+      EnumValue key = new EnumValue(EnumsRow.getSystemName(), EnumsRow.getObjectName(),
+          EnumsRow.getFieldName(),EnumsRow.getEnumKey());
+      EnumValueMap.put(key, EnumsRow.getEnumValue());
+    });
+    return EnumValueMap;
+  }
+
+}
