@@ -1,0 +1,156 @@
+package com.sample.utils.client;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.LocalDateTime;
+import java.util.Map;
+import java.util.Optional;
+import kong.unirest.HttpRequest;
+import kong.unirest.HttpResponse;
+import kong.unirest.Unirest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+
+@Component
+public class ABCClient {
+
+  private final ObjectMapper _objectMapper;
+  private static final Logger _logger = LoggerFactory.getLogger(ABCClient.class);
+  private static final String AUTHORIZATION_HEADER = "Bearer %s";
+
+  private static AccessToken _accessToken;
+  private final String _clientId;
+  private final String _clientSecret;
+  private final String _accessTokenUrl;
+  private final String _resource;
+  private final Long _tokenExpireTime;
+
+  @Autowired
+  public ABCClient(@Value("${ABC-connected-app-client-id}") String clientId,
+      @Value("${ABC-connected-app-client-secret-value}") String clientSecret,
+      @Value("${ABC-access-token-url}") String accessTokenUrl,
+      @Value("${ABC-connected-app-resource}") String resource,
+      @Value("${ABC-access-token-expire-hr}") Long tokenExpireTime
+      ){
+    _clientId = clientId;
+    _clientSecret = clientSecret;
+    _accessTokenUrl = accessTokenUrl;
+    _resource = resource;
+    _tokenExpireTime = tokenExpireTime;
+    _objectMapper =  new ObjectMapper();
+  }
+
+  private class AccessToken{
+    String value;
+    LocalDateTime date;
+    public AccessToken(String accessToken){
+      this.value = accessToken;
+      date = LocalDateTime.now();
+    }
+  }
+
+  /**
+   * Gets access token from ABC
+   *
+   * @return String - access token
+   */
+  public String getAccessToken(){
+    if(_accessToken == null ||
+        _accessToken.date.isBefore(LocalDateTime.now().minusHours(_tokenExpireTime).minusMinutes(5l))){
+      synchronized(this) {
+        _accessToken = getABCAccessToken();
+      }
+    }
+    System.out.println("Access Code ::: "+_accessToken.value);
+    return _accessToken.value;
+  }
+
+  private AccessToken getABCAccessToken() {
+    try {
+      _logger.info("inside ABC client getAccessToken");
+      String accessToken = Unirest.post(_accessTokenUrl)
+          .field("grant_type", "client_credentials")
+          .field("client_id", _clientId)
+          .field("client_secret", _clientSecret)
+          .field("resource", _resource)
+          .asJson()
+          .getBody()
+          .getObject()
+          .get("access_token")
+          .toString();
+
+      return new AccessToken(accessToken);
+    } catch (Exception exception) {
+      _logger.error("Exception in Getting ABC Access Token:" + exception.getMessage());
+      return null;
+    }
+  }
+
+  /**
+   * Sends Get request for the given query and body
+   *
+   * @param uri - uri call to make request
+   * @param queryString - query for the get call
+   * @return String - JSON result of the get call
+   */
+  public Optional<String> sendGetRequest(String uri, Map<String, Object> queryString) {
+    _logger.info("inside ABC client sendGetRequest");
+    _logger.info("ABC sendGetRequest URI: "+uri + " QueryString: "+queryString);
+    if(queryString != null && !queryString.isEmpty()){
+      return sendRequest(Unirest.get(uri).queryString(queryString)).map(HttpResponse::getBody);
+    }
+    return sendRequest(Unirest.get(uri)).map(HttpResponse::getBody);
+  }
+
+  /**
+   * Sends Post request for the given query and body
+   *
+   * @param uri - uri call to make request
+   * @param requestBody - request body for the post call
+   * @return String - JSON result of the post call
+   */
+  public Optional<String> sendPostRequest(String uri, String requestBody){
+    _logger.info("inside ABC client sendPostRequest");
+    _logger.info("ABC sendPostRequest URI: "+uri + " requestBody: "+requestBody);
+    return sendRequest(Unirest.post(uri).body(requestBody)).map(HttpResponse::getBody);
+  }
+
+  /**
+   * Sends the HTTP Request
+   *
+   * @param request - HTTP Request to be sent
+   * @return HttpResponse<String> - HTTP Response
+   */
+  private <R extends HttpRequest> Optional<HttpResponse<String>> sendRequest(HttpRequest<R> request) {
+    _logger.info("Creating ABC request to send");
+    HttpResponse<String> httpResponse = formatRequest(request);
+
+    if(httpResponse.isSuccess()){
+      _logger.info("Successful HTTP response");
+      return Optional.of(httpResponse);
+    }
+    _logger.info("http response status: {}",httpResponse.getStatus());
+    return Optional.empty();
+  }
+
+  /**
+   * Formats the HTTP Request
+   *
+   * @param request - HTTP Request to be formatted
+   * @return HttpResponse - HTTP Response
+   */
+  private <R extends HttpRequest> HttpResponse formatRequest(HttpRequest<R> request) {
+    _logger.info("Calling ABC api with given request");
+    HttpResponse response = request
+        .header("x-Authorization", String.format(AUTHORIZATION_HEADER, getAccessToken()))
+        .accept("application/json")
+        .asString();
+
+    _logger.info("The response status {}",response.getStatus());
+    _logger.info("The response body {}",response.getBody());
+    return response;
+  }
+}
