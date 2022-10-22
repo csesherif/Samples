@@ -1,0 +1,94 @@
+plugins {
+	id 'org.springframework.boot' version '2.3.3.RELEASE'
+	id 'io.spring.dependency-management' version '1.0.8.RELEASE'
+	id 'java'
+	id "io.freefair.lombok" version "4.1.6"
+	id "jacoco"
+}
+
+group = 'com.linkedin.epe.vantage'
+version = '0.0.1-SNAPSHOT'
+sourceCompatibility = '1.11'
+
+repositories {
+	mavenCentral()
+}
+
+ext {
+	set('azureVersion', "2.3.1")
+	set('keyvaultVersion', '2.3.1')
+	set('serviceBus', '1.1.2')
+	jacocoVersion = '0.8.4'
+}
+
+dependencies {
+	implementation group: 'com.github.javafaker', name: 'javafaker', version: '1.0.2'
+	implementation group: 'com.konghq', name: 'unirest-java', version: '3.11.09'
+	implementation group: 'org.apache.commons', name: 'commons-text', version: '1.9'
+	compileOnly(group: "org.projectlombok", name: "lombok")
+	implementation group: 'org.json', name: 'json', version: '20210307'
+	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+	compile(group: 'com.microsoft.sqlserver', name: 'mssql-jdbc', version: '8.4.1.jre8')
+	implementation group: 'org.apache.commons', name: 'commons-text', version: '1.9'
+
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+	implementation 'org.springframework.boot:spring-boot-starter-web'
+	compile "com.microsoft.azure:azure-keyvault-secrets-spring-boot-starter:${keyvaultVersion}"
+	implementation group: 'com.azure.spring', name: 'azure-spring-boot-starter-servicebus-jms', version: '3.5.0'
+
+	implementation 'com.microsoft.azure:applicationinsights-spring-boot-starter:2.6.0'
+	compile group: 'com.microsoft.azure', name: 'applicationinsights-logging-log4j1_2', version: '2.6.1'
+	compile group: 'com.microsoft.azure', name: 'applicationinsights-logging-logback', version: '2.6.1'
+	compile group: 'com.microsoft.azure', name: 'azure-storage', version: '8.6.5'
+
+	testImplementation('org.springframework.boot:spring-boot-starter-test')
+	implementation group: 'com.github.javafaker', name: 'javafaker', version: '1.0.2'
+	testCompile("org.springframework.boot:spring-boot-starter-test")
+	testCompile 'org.junit.jupiter:junit-jupiter-engine:5.6.2'
+	testCompile "org.junit.jupiter:junit-jupiter-params:5.6.2"
+	testRuntime "org.junit.jupiter:junit-jupiter-engine:5.6.2"
+}
+
+test {
+	finalizedBy jacocoTestReport
+	useJUnitPlatform()
+	systemProperty('spring.profiles.active', 'poc')
+}
+
+jacoco {
+	toolVersion = jacocoVersion
+}
+
+jacocoTestCoverageVerification {
+	violationRules {
+		rule {
+			limit {
+				minimum = "0.0".toBigDecimal()
+			}
+		}
+	}
+}
+
+jacocoTestReport {
+	reports {
+		html.enabled = true
+		xml.enabled = true
+		csv.enabled = true
+	}
+}
+
+/* Required by Euclid */
+tasks.register("citest") {}
+tasks.register("cibuild") {}
+
+task cipublish(type: Copy) {
+	mkdir "$buildDir/ci/publish/java"
+	from "$buildDir/libs"
+	into "$buildDir/ci/publish/java"
+}
+
+test.finalizedBy jacocoTestReport
+check.dependsOn jacocoTestReport
+check.dependsOn jacocoTestCoverageVerification
+citest.dependsOn check
+cibuild.dependsOn bootJar
