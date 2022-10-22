@@ -1,0 +1,194 @@
+package com.sample.epe.sync.services.Internal;
+
+import com.sample.epe.sync.models.enums.CRMObject;
+import com.sample.epe.sync.models.enums.FieldType;
+import com.sample.epe.sync.models.enums.SystemName;
+import com.sample.epe.sync.models.internal.DataDetail;
+import com.sample.epe.sync.models.sql.FieldMappingKey;
+import com.sample.epe.sync.models.sql.FieldMappingRow;
+import com.sample.epe.sync.models.sql.ObjectNameKey;
+import com.sample.epe.sync.models.sql.EnumKey;
+import com.sample.epe.sync.models.sql.EnumValue;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.stereotype.Service;
+
+
+@Service
+public class MappingService {
+
+  private Map<FieldMappingKey, List<FieldMappingRow>> _fieldmappings;
+  private Map<ObjectNameKey, Set<String>> _objectNameMappings;
+  private Map<EnumKey, String> _EnumKeyMap;
+  private Map<EnumValue, String> _EnumValueMap;
+
+  private Logger _logger = LoggerFactory.getLogger(MappingService.class);
+
+  @Autowired
+  public MappingService(@Qualifier("FieldMapping") Map<FieldMappingKey, List<FieldMappingRow>> fieldmappings,
+      @Qualifier("ObjectNameMapping") Map<ObjectNameKey, Set<String>> objectNameMappings,
+      @Qualifier("EnumKey") Map<EnumKey, String> EnumKeyMap,
+      @Qualifier("EnumValue") Map<EnumValue, String> EnumValueMap){
+    _fieldmappings = fieldmappings;
+    _objectNameMappings = objectNameMappings;
+    _EnumKeyMap = EnumKeyMap;
+    _EnumValueMap = EnumValueMap;
+  }
+
+  /*
+   * Returns the name of the equivalent key in target system
+   * Returns empty list if no results
+   */
+ public List<DataDetail> getKeyEquivalent(SystemName sourceSystem, String sourceObject, String sourceKey,
+      SystemName targetSystem){
+   _logger.info("Inside getKeyEquivalent api");
+   return getValueEquivalent(sourceSystem, sourceObject, sourceKey, null, targetSystem);
+  }
+
+  /*
+  * Returns the name of the equivalent key and value in target system
+  * Returns empty list if no results
+  * if the sinkType is Pick_List, get the correct value from  Enum table. otherwise set the source value to target value.
+   * Modify the sourceValue to fit the requirements of the target system
+   */
+  public List<DataDetail> getValueEquivalent(SystemName sourceSystem, String sourceObject, String sourceKey,
+      String sourceValue, SystemName targetSystem){
+    _logger.info("Inside getValueEquivalent api");
+    List<DataDetail> dataDetails = new ArrayList<>();
+    if( sourceSystem == null || StringUtils.isBlank(sourceObject)
+        || StringUtils.isBlank(sourceKey) || targetSystem == null){
+      return dataDetails;
+    }
+    List<FieldMappingRow> fieldMappings = _fieldmappings.get(new FieldMappingKey(sourceSystem.getValue(), sourceObject, targetSystem.getValue()));
+    if(fieldMappings != null && !fieldMappings.isEmpty()){
+      fieldMappings.stream()
+          .filter(fieldmapping -> sourceKey.equals(fieldmapping.getSystemSourceFieldName()))
+          .forEach(fieldMappingRow -> {
+            dataDetails.add(DataDetail.builder()
+                .systemName(targetSystem)
+                .objectType(fieldMappingRow.getSystemSinkObjectName())
+                .key(fieldMappingRow.getSystemSinkFieldName())
+                .value(getTargetValue(fieldMappingRow, sourceValue))
+                .fieldType(FieldType.getKey(fieldMappingRow.getSinkType()))
+                .isCustomField(fieldMappingRow.isCustomField())
+                .build());
+      });
+    }
+//    _logger.info("Exit getValueEquivalent api with response : "+dataDetails);
+    return dataDetails;
+  }
+
+  private String getTargetValue(FieldMappingRow fieldMappingRow, String sourceValue){
+    if(StringUtils.isBlank(sourceValue) || fieldMappingRow == null) return sourceValue;
+    String EnumValue = null;
+    if(FieldType.PICK_LIST.getValue().equalsIgnoreCase(fieldMappingRow.getSinkType())){
+      _logger.info("The sinkType is PickList");
+      String EnumKey = _EnumKeyMap.get(new EnumKey(fieldMappingRow.getSystemSource(), fieldMappingRow.getSystemSourceObjectName(),
+          fieldMappingRow.getSystemSourceFieldName(), sourceValue));
+      if(!StringUtils.isBlank(EnumKey)){
+        EnumValue = _EnumValueMap.get(new EnumValue(fieldMappingRow.getSystemSink(), fieldMappingRow.getSystemSinkObjectName(),
+            fieldMappingRow.getSystemSinkFieldName(), EnumKey));
+      }
+      _logger.info("The EnumValue for the pick list is: "+EnumValue);
+    }
+    return StringUtils.isBlank(EnumValue)? sourceValue : EnumValue;
+  }
+
+  /*
+  * Returns the equivalent object, returns null if no objects are found or more than 1 object is found
+   */
+  public String getUniqueObjectEquivalent(SystemName sourceSystem, SystemName sinkSystem, String sourceObject){
+    _logger.info("Inside getUniqueObjectEquivalent api");
+    List<String> sinkObjects = getObjectEquivalent(sourceSystem,sinkSystem,sourceObject);
+    if(sinkObjects.isEmpty() || sinkObjects.size() > 1){
+      _logger.info("No objects are found or more than 1 object is found");
+      return null;
+    } else{
+      return sinkObjects.get(0);
+    }
+  }
+
+  /*
+   * Returns the equivalent objects, returns empty list if no objects are found
+   */
+  public List<String> getObjectEquivalent(SystemName sourceSystem, SystemName sinkSystem, String sourceObject){
+    _logger.info("Inside getObjectEquivalent api");
+    List<String> sinkobjectsNames = new ArrayList<>();
+    if( sourceSystem == null || sinkSystem == null || StringUtils.isBlank(sourceObject)){
+      return sinkobjectsNames;
+    }
+    Set<String> objectName = _objectNameMappings.get(new ObjectNameKey(sourceSystem.getValue(), sourceObject, sinkSystem.getValue()));
+    if(objectName != null && !objectName.isEmpty()){
+      _logger.info("Found sink objects");
+      sinkobjectsNames.addAll(objectName);
+    }
+    return sinkobjectsNames;
+  }
+
+  /*
+   * Returns the list of related objects in the system that are touched due to this object being touched.
+   * I.e all objects that will be side effects of this object
+   */
+  public List<CRMObject> getSideEffectObjects(SystemName sourceSystem, SystemName sinkSystem,  String object){
+    return new ArrayList<>();
+  }
+
+  /*
+  * Returns the list of fields on the object given
+  * USES API name for field
+  * Returns empty list if no results
+   */
+  public List<String> getFieldList(SystemName sourceSystem, SystemName sinkSystem, String sourceObject){
+    if(sourceSystem == null || sinkSystem == null || StringUtils.isBlank(sourceObject)){
+      return new ArrayList<>();
+    }
+    List<FieldMappingRow> fieldMappingRows = _fieldmappings.get(new FieldMappingKey(sourceSystem.getValue(), sourceObject,
+        sinkSystem.getValue()));
+    Set<String> fields = new HashSet<>();
+    if(fieldMappingRows != null && !fieldMappingRows.isEmpty()){
+      fieldMappingRows.forEach(fieldMappingRow -> {
+        fields.add(fieldMappingRow.getSystemSourceFieldName());
+      });
+    }
+    return new ArrayList<>(fields);
+  }
+
+  /*
+   * Returns the list of objects in the given system
+   * USES API name for Object
+   * Returns empty list if no results
+   */
+  public List<String> getObjectList(SystemName sourceSystem, SystemName sinkSystem) {
+    return Arrays.asList("Account");
+  }
+
+  /*
+  * Returns the map of objects to field lists for a given system
+  * Returns empty list if no results
+   */
+  public Map<String, List<String>> getFieldMap(SystemName system) {
+    return null;
+  }
+
+  /*
+   * Returns the field name on an object that corresponds to field which points to a corresponding account Id
+   * Returns null if not present
+   */
+  public String getAccountIdFieldName(SystemName systemName, String objectName){
+    return null;
+  }
+
+  public String getOpportunityIdFieldName(SystemName systemName, String objectName){return null;}
+
+  public String getContactIdFieldName(SystemName systemName, String objectName){return null;}
+
+}
