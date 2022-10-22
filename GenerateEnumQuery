@@ -1,0 +1,67 @@
+package xcel;
+
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.math.BigDecimal;
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.ss.usermodel.WorkbookFactory;
+
+
+public class GenerateEnumQuery {
+
+  public static void generateEnumQuery(){
+    try(InputStream inputStream = new FileInputStream("/Users/mbasheer/Documents/Enums.xlsx")) {
+      Workbook workbook = WorkbookFactory.create(inputStream);
+
+      Sheet sheet = workbook.getSheetAt(0);
+      int rowcount = sheet.getLastRowNum();
+      for(int i=1; i<= rowcount; i++){
+        Row row = sheet.getRow(i);
+
+
+        String system = row.getCell(0) != null ? row.getCell(0).toString() : null;
+        String objectName = row.getCell(1) != null ? row.getCell(1).toString() : null;
+        String fieldName = row.getCell(2) != null ? row.getCell(2).toString() : null;
+        String label = row.getCell(3) != null ? row.getCell(3).toString() : null;
+//        String value = row.getCell(4) != null ? row.getCell(4).toString() : null;
+        String key = row.getCell(5) != null ? row.getCell(5).toString() : null;
+//        int sinkCustom = row.getCell(17) != null ? (int)row.getCell(17).getNumericCellValue() : null;
+//        String value = "test";
+        String value = null;
+        try{
+          Double doubleValue = row.getCell(4) != null ? row.getCell(4).getNumericCellValue() : null;
+          BigDecimal bd = new BigDecimal(doubleValue.toString());
+          long lonVal = bd.longValue();
+          value = Long.toString(lonVal).trim();
+        }
+        catch (Exception ex){
+          value = row.getCell(4) != null ? row.getCell(4).toString() : null;
+        }
+
+        String query = "INSERT INTO Enums(SystemName, ObjectName, FieldName, FieldEnumLabel, FieldEnumValue, FieldEnumKey)VALUES('"+system+"', '"+objectName+"', '"+fieldName+"', '"+label+"', '"+value+"', '"+key+"');";
+
+
+        System.out.println("The Query ::: "+query);
+
+        Cell queryCell = row.createCell(6);
+        queryCell.setCellValue(query);
+      }
+
+      try(OutputStream outputStream = new FileOutputStream("/Users/mbasheer/Documents/Enums.xlsx")) {
+        workbook.write(outputStream);
+      }
+    }catch (IOException ex) {
+      ex.printStackTrace();
+    }
+  }
+
+  public static void main(String[] args) {
+    GenerateEnumQuery.generateEnumQuery();
+  }
+}
