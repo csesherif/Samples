@@ -118,6 +118,28 @@ public class ABCClient {
     return sendRequest(Unirest.post(uri).body(requestBody)).map(HttpResponse::getBody);
   }
 
+
+/**
+   * Queries any object in salesforce based on given query
+   *
+   * @param query - query string used to search
+   * @param baseClass - base class of given type
+   * @return QueryResult<T> - QueryResult for the given type
+   */
+  public <T extends SObject> QueryResult<T> query(String query, Class<T> baseClass) throws JsonProcessingException {
+    _logger.info("inside dynamics client query");
+    JavaType type = _objectMapper.getTypeFactory().constructParametricType(QueryResult.class, baseClass);
+    String jsonResult = sendRequest(Unirest.get(_queryEndpoint + query)).getBody();
+    _logger.info("dynamics client query:" + query);
+    _logger.info("dynamics jsonResult:" + jsonResult);
+    if (!Strings.isNullOrEmpty(jsonResult)) {
+      return _objectMapper.readValue(jsonResult, type);
+    } else {
+      return null;
+    }
+  }
+  
+  
   /**
    * Sends the HTTP Request
    *
