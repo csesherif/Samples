@@ -1,0 +1,4 @@
+package com.sample.utils.models;
+
+public abstract class SObject {
+}
