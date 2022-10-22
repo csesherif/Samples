@@ -1,0 +1,523 @@
+package com.sample.epe.outbound.services.handlers;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sample.epe.outbound.constants.DynamicsConstants;
+import com.sample.epe.outbound.data.MessageClient;
+import com.sample.epe.outbound.models.MockTestResult;
+import com.sample.epe.outbound.models.enums.Action;
+import com.sample.epe.outbound.models.output.BulkWriterInput;
+import com.sample.epe.outbound.models.output.UpdateField;
+import com.sample.epe.outbound.models.output.WriterInput;
+import com.sample.epe.outbound.models.output.WriterMessage;
+import com.sample.epe.outbound.models.sql.DataMappingRow;
+import com.sample.epe.outbound.models.sql.DynamicsEnumField;
+import com.sample.epe.outbound.models.sql.DynamicsEnumRow;
+import com.sample.epe.outbound.models.sql.FieldMappingRow;
+import com.sample.epe.outbound.models.sql.ObjectField;
+import com.sample.epe.outbound.repository.DataMappingRepo;
+import com.sample.epe.outbound.services.objects.DataService;
+import com.sample.epe.outbound.services.objects.LeadService;
+import com.sample.epe.outbound.services.objects.OwnerService;
+import com.sample.epe.outbound.services.objects.PersonService;
+import com.microsoft.applicationinsights.TelemetryClient;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+public class TestDynamicsHandler {
+
+  private static Map<String, Set<String>> dtoSLObjects;
+  private static Map<ObjectField, Set<ObjectField>> objectFieldSetMap;
+  private static Map<ObjectField, FieldMappingRow> objectFieldSetMapRow;
+  private static Map<DynamicsEnumField, DynamicsEnumRow> dynamicsEnumMap;
+  private static ObjectMapper mapper = new ObjectMapper();
+
+  @Mock
+  TelemetryClient _telemetryClient;
+
+  @Mock
+  DataMappingRepo _dataMappingRepo;
+
+  @Mock
+  MessageClient _messageClient;
+
+  @Mock
+  LeadService _leadService;
+
+  @Mock
+  PersonService _personService;
+
+  @Mock
+  OwnerService _ownerService;
+
+  @Mock
+  DataService _dataService;
+
+  @BeforeAll
+  public static void setUp() throws IOException {
+
+    String objectMapping = new String(Files.readAllBytes(Paths.get("src/test/resources/general/ObjectMapping.json")));
+
+    String fieldMappingKeys = new String(Files.readAllBytes(Paths.get("src/test/resources/general/FieldMappingKeys.json")));
+
+    String fieldMappingValues = new String(Files.readAllBytes(Paths.get("src/test/resources/general/FieldMappingValues.json")));
+
+    String fieldMappingValuesRows = new String(Files.readAllBytes(Paths.get("src/test/resources/general/FieldMappingValuesRows.json")));
+
+    String fieldEnumKeys = new String(Files.readAllBytes(Paths.get("src/test/resources/general/FieldEnumKeys.json")));
+
+    String fieldEnumValues = new String(Files.readAllBytes(Paths.get("src/test/resources/general/FieldEnumValues.json")));
+
+    TypeReference<Map<String,Set<String>>> typeReferenceObjectMap =
+        new TypeReference<Map<String,Set<String>>>() {};
+    dtoSLObjects = mapper.readValue(objectMapping,typeReferenceObjectMap);
+
+    TypeReference<List<ObjectField>> typeReferenceFieldKeys =
+        new TypeReference<List<ObjectField>>() {};
+    List<ObjectField> objectkeys = mapper.readValue(fieldMappingKeys,typeReferenceFieldKeys);
+
+    TypeReference<List<Set<ObjectField>>> typeReferenceFieldValues =
+        new TypeReference<List<Set<ObjectField>>>() {};
+    List<Set<ObjectField>> objectFieldValues = mapper.readValue(fieldMappingValues,typeReferenceFieldValues);
+
+    TypeReference<List<FieldMappingRow>> typeReferenceFieldValuesRows =
+        new TypeReference<List<FieldMappingRow>>() {};
+    List<FieldMappingRow> objectFieldValuesRows = mapper.readValue(fieldMappingValuesRows,typeReferenceFieldValuesRows);
+
+    TypeReference<List<DynamicsEnumField>> typeReferenceFieldEnumKeys=
+        new TypeReference<List<DynamicsEnumField>>() {};
+    List<DynamicsEnumField> fieldEnumKeysList = mapper.readValue(fieldEnumKeys,typeReferenceFieldEnumKeys);
+
+    TypeReference<List<DynamicsEnumRow>> typeReferenceFieldEnumValues =
+        new TypeReference<List<DynamicsEnumRow>>() {};
+    List<DynamicsEnumRow> fieldEnumValuesList = mapper.readValue(fieldEnumValues,typeReferenceFieldEnumValues);
+
+    objectFieldSetMap = new HashMap<>();
+    objectFieldSetMapRow = new HashMap<>();
+    for(int i = 0; i < objectkeys.size();i++){
+      objectFieldSetMap.put(objectkeys.get(i),objectFieldValues.get(i));
+      objectFieldSetMapRow.put(objectkeys.get(i),objectFieldValuesRows.get(i));
+    }
+
+    dynamicsEnumMap = new HashMap<>();
+    for(int i = 0; i< fieldEnumKeysList.size(); i++) {
+      dynamicsEnumMap.put(fieldEnumKeysList.get(i),fieldEnumValuesList.get(i));
+    }
+
+  }
+
+
+  @Test
+  public void testAccountUpdateHandler() throws IOException {
+
+    MockTestResult result = getValuesSentToSalesloft("src/test/resources/update/account/event.json",
+        "src/test/resources/update/account/DataMappingRows.json","Account");
+
+    BulkWriterInput bulkWriterInput = (BulkWriterInput) result.writerMessage;
+
+    System.out.println("#################################### ::::::::::: "+bulkWriterInput);
+
+    Assertions.assertNotNull(bulkWriterInput.getTransactionId());
+    Assertions.assertTrue(bulkWriterInput.getPods().stream().anyMatch(input -> input.getObjectName().equals("Account")));
+
+    List<WriterInput> writerInputs = bulkWriterInput.getPods().get(0).getWriterInputList();
+    Assertions.assertEquals(1,writerInputs.size());
+
+    WriterInput writerInput = writerInputs.get(0);
+    System.out.println(new ObjectMapper().writeValueAsString(writerInput));
+    Assertions.assertEquals(result.universalIds.iterator().next(),writerInput.getUniversalId());
+    Assertions.assertEquals(result.objectIds.iterator().next(),writerInput.getObjectId());
+    Assertions.assertEquals("Account",writerInput.getOriginalObjectName());
+    Assertions.assertEquals(Action.UPSERT, writerInput.getAction());
+    Assertions.assertEquals("Account",writerInput.getObjectName());
+    Assertions.assertTrue(writerInput.getFields().stream()
+        .anyMatch(field -> result.fields.contains(field.getName())));
+  }
+
+  @Test
+  public void testLeadUpdateHandler() throws IOException {
+
+    MockTestResult result = getValuesSentToSalesloft("src/test/resources/update/lead/event.json",
+        "src/test/resources/update/lead/DataMappingRows.json","Lead");
+
+    BulkWriterInput bulkWriterInput = (BulkWriterInput) result.writerMessage;
+    Assertions.assertNotNull(bulkWriterInput.getTransactionId());
+    Assertions.assertTrue(bulkWriterInput.getPods().stream().anyMatch(input -> input.getObjectName().equals("Person")));
+
+    List<WriterInput> writerInputs = bulkWriterInput.getPods().get(0).getWriterInputList();
+    Assertions.assertEquals(1,writerInputs.size());
+
+    WriterInput writerInput = writerInputs.get(0);
+    Assertions.assertEquals(result.universalIds.iterator().next(),writerInput.getUniversalId());
+    Assertions.assertEquals(result.objectIds.iterator().next(),writerInput.getObjectId());
+    Assertions.assertEquals(Action.UPSERT, writerInput.getAction());
+    Assertions.assertEquals("Lead",writerInput.getOriginalObjectName());
+    Assertions.assertEquals("Person",writerInput.getObjectName());
+    Assertions.assertTrue(writerInput.getFields().stream()
+        .anyMatch(field -> result.fields.contains(field.getName())));
+    Assertions.assertTrue(writerInput.getFields().stream()
+        .anyMatch(updateField -> updateField.getName().equals("Lead Creation Date")
+            && String.valueOf(updateField.getNewValue()).contains("Aug 10")));
+  }
+
+  @Test
+  public void testContactUpdateHandler() throws IOException {
+
+    MockTestResult result = getValuesSentToSalesloft("src/test/resources/update/contact/event.json",
+        "src/test/resources/update/contact/DataMappingRows.json","Contact");
+
+    BulkWriterInput bulkWriterInput = (BulkWriterInput) result.writerMessage;
+    Assertions.assertNotNull(bulkWriterInput.getTransactionId());
+    Assertions.assertTrue(bulkWriterInput.getPods().stream().anyMatch(input -> input.getObjectName().equals("Person")));
+
+    List<WriterInput> writerInputs = bulkWriterInput.getPods().get(0).getWriterInputList();
+    Assertions.assertEquals(1,writerInputs.size());
+
+    WriterInput writerInput = writerInputs.get(0);
+    String newEmail = (String) writerInput.getFields().stream().filter(field -> field.getName().equals("Email"))
+        .findFirst()
+        .map(UpdateField::getNewValue).orElse(null);
+
+    Assertions.assertEquals(newEmail,writerInput.getUniversalId());
+    Assertions.assertEquals(result.objectIds.iterator().next(),writerInput.getObjectId());
+    Assertions.assertEquals(Action.UPSERT, writerInput.getAction());
+    Assertions.assertEquals("Contact",writerInput.getOriginalObjectName());
+    Assertions.assertEquals("Person",writerInput.getObjectName());
+    Assertions.assertTrue(writerInput.getFields().stream()
+        .anyMatch(field -> result.fields.contains(field.getName())));
+
+    System.out.println(mapper.writeValueAsString(writerInput));
+  }
+
+  @Test
+  public void testDoNotContactCallOn() throws IOException {
+
+    MockTestResult result = getValuesSentToSalesloft("src/test/resources/update/contact/donotcallon/event.json",
+        "src/test/resources/update/contact/donotcallon/DataMappingRows.json","Contact");
+
+    BulkWriterInput bulkWriterInput = (BulkWriterInput) result.writerMessage;
+    Assertions.assertNotNull(bulkWriterInput.getTransactionId());
+    Assertions.assertTrue(bulkWriterInput.getPods().stream().anyMatch(input -> input.getObjectName().equals("Person")));
+
+    List<WriterInput> writerInputs = bulkWriterInput.getPods().get(0).getWriterInputList();
+    Assertions.assertEquals(1,writerInputs.size());
+
+    WriterInput writerInput = writerInputs.get(0);
+    Assertions.assertTrue(writerInput
+        .getFields()
+        .stream()
+        .anyMatch(field -> field.getName().equals("contact_restrictions")
+            && ((ArrayList<String>) field.getNewValue()).contains("call")));
+
+  }
+
+  @Test
+  public void testDoNotContactCallOff() throws IOException {
+
+    MockTestResult result = getValuesSentToSalesloft("src/test/resources/update/contact/donotcalloff/event.json",
+        "src/test/resources/update/contact/donotcalloff/DataMappingRows.json","Contact");
+
+    BulkWriterInput bulkWriterInput = (BulkWriterInput) result.writerMessage;
+    Assertions.assertNotNull(bulkWriterInput.getTransactionId());
+    Assertions.assertTrue(bulkWriterInput.getPods().stream().anyMatch(input -> input.getObjectName().equals("Person")));
+
+    List<WriterInput> writerInputs = bulkWriterInput.getPods().get(0).getWriterInputList();
+    Assertions.assertEquals(1,writerInputs.size());
+
+    WriterInput writerInput = writerInputs.get(0);
+    Assertions.assertTrue(writerInput
+        .getFields()
+        .stream()
+        .anyMatch(field -> field.getName().equals("contact_restrictions")
+            && ((ArrayList<String>) field.getNewValue()).isEmpty()));
+
+  }
+
+  @Test
+  public void testDoNotContactCallOffSFDCExists() throws IOException {
+
+    MockTestResult result = getValuesSentToSalesloft("src/test/resources/update/contact/donotcalloff-sfdc-exists/event.json",
+        "src/test/resources/update/contact/donotcalloff-sfdc-exists/DataMappingRows.json","Contact");
+
+    BulkWriterInput bulkWriterInput = (BulkWriterInput) result.writerMessage;
+    Assertions.assertNotNull(bulkWriterInput.getTransactionId());
+    Assertions.assertTrue(bulkWriterInput.getPods().stream().anyMatch(input -> input.getObjectName().equals("Person")));
+
+    List<WriterInput> writerInputs = bulkWriterInput.getPods().get(0).getWriterInputList();
+    Assertions.assertEquals(1,writerInputs.size());
+
+    WriterInput writerInput = writerInputs.get(0);
+    Assertions.assertTrue(writerInput
+        .getFields()
+        .stream()
+        .noneMatch(field -> field.getName().equals("contact_restrictions")));
+  }
+
+  @Test
+  public void testAccountDeleteHandler() throws IOException {
+
+    MockTestResult result = getValuesSentToSalesloft("src/test/resources/delete/account/event.json",
+        "src/test/resources/delete/account/DataMappingRows.json","Contact");
+
+    WriterInput writerInput = (WriterInput) result.writerMessage;
+    Assertions.assertNotNull(writerInput.getTransactionId());
+    Assertions.assertTrue(writerInput.getObjectName().equals("Account"));
+
+    Assertions.assertEquals(result.universalIds.iterator().next(),writerInput.getUniversalId());
+    Assertions.assertEquals(result.objectIds.iterator().next(),writerInput.getObjectId());
+    Assertions.assertEquals(Action.DELETE, writerInput.getAction());
+    Assertions.assertEquals("Account",writerInput.getOriginalObjectName());
+    Assertions.assertEquals("Account",writerInput.getObjectName());
+    Assertions.assertTrue(writerInput.getFields().isEmpty());
+  }
+
+  @Test
+  public void testContactDeleteHandler() throws IOException {
+
+    MockTestResult result = getValuesSentToSalesloft("src/test/resources/delete/contact/event.json",
+        "src/test/resources/delete/contact/DataMappingRows.json","Contact");
+
+    WriterInput writerInput = (WriterInput) result.writerMessage;
+    Assertions.assertNotNull(writerInput.getTransactionId());
+    Assertions.assertTrue(writerInput.getObjectName().equals("Person"));
+
+    Assertions.assertEquals(result.universalIds.iterator().next(),writerInput.getUniversalId());
+    Assertions.assertEquals(result.objectIds.iterator().next(),writerInput.getObjectId());
+    Assertions.assertEquals(Action.DELETE, writerInput.getAction());
+    Assertions.assertEquals("Contact",writerInput.getOriginalObjectName());
+    Assertions.assertEquals("Person",writerInput.getObjectName());
+    Assertions.assertTrue(writerInput.getFields().isEmpty());
+  }
+
+  @Test
+  public void testLeadDeleteHandler() throws IOException {
+
+    MockTestResult result = getValuesSentToSalesloft("src/test/resources/delete/lead/event.json",
+        "src/test/resources/delete/lead/DataMappingRows.json","Lead");
+
+    WriterInput writerInput = (WriterInput) result.writerMessage;
+    Assertions.assertNotNull(writerInput.getTransactionId());
+    Assertions.assertTrue(writerInput.getObjectName().equals("Person"));
+
+    Assertions.assertEquals(result.universalIds.iterator().next(),writerInput.getUniversalId());
+    Assertions.assertEquals(result.objectIds.iterator().next(),writerInput.getObjectId());
+    Assertions.assertEquals(Action.DELETE, writerInput.getAction());
+    Assertions.assertEquals("Lead",writerInput.getOriginalObjectName());
+    Assertions.assertEquals("Person",writerInput.getObjectName());
+    Assertions.assertTrue(writerInput.getFields().isEmpty());
+  }
+
+  @Test
+  public void testContactSoftDeleteHandler() throws IOException {
+
+    MockTestResult result = getValuesSentToSalesloft("src/test/resources/soft_delete/contact/event.json",
+        "src/test/resources/soft_delete/contact/DataMappingRows.json","Contact");
+
+    WriterInput writerInput = (WriterInput) result.writerMessage;
+    Assertions.assertNotNull(writerInput.getTransactionId());
+    Assertions.assertTrue(writerInput.getObjectName().equals("Person"));
+
+    Assertions.assertEquals(result.universalIds.iterator().next(),writerInput.getUniversalId());
+    Assertions.assertEquals(result.objectIds.iterator().next(),writerInput.getObjectId());
+    Assertions.assertEquals(Action.DELETE, writerInput.getAction());
+    Assertions.assertEquals("Contact",writerInput.getOriginalObjectName());
+    Assertions.assertEquals("Person",writerInput.getObjectName());
+    Assertions.assertTrue(writerInput.getFields().isEmpty());
+  }
+
+  @Test
+  public void testLeadSoftDeleteHandler() throws IOException {
+
+    MockTestResult result = getValuesSentToSalesloft("src/test/resources/soft_delete/lead/event.json",
+        "src/test/resources/soft_delete/lead/DataMappingRows.json","Lead");
+
+    WriterInput writerInput = (WriterInput) result.writerMessage;
+    Assertions.assertNotNull(writerInput.getTransactionId());
+    Assertions.assertTrue(writerInput.getObjectName().equals("Person"));
+
+    Assertions.assertEquals(result.universalIds.iterator().next(),writerInput.getUniversalId());
+    Assertions.assertEquals(result.objectIds.iterator().next(),writerInput.getObjectId());
+    Assertions.assertEquals(Action.DELETE, writerInput.getAction());
+    Assertions.assertEquals("Lead",writerInput.getOriginalObjectName());
+    Assertions.assertEquals("Person",writerInput.getObjectName());
+    Assertions.assertTrue(writerInput.getFields().isEmpty());
+  }
+
+  @Test
+  public void testDualDeleteHandler() throws IOException {
+
+    DataMappingRow dataMappingRow = getSavedRowFromDelete("src/test/resources/delete/dual_sync_delete/event.json",
+        "src/test/resources/delete/dual_sync_delete/DataMappingRows.json",true);
+
+    Assertions.assertNotNull(dataMappingRow);
+  }
+
+  @Test
+  public void testAddressConversion() throws IOException {
+    MockTestResult result = getValuesSentToSalesloft("src/test/resources/update/account/address_update/event.json",
+        "src/test/resources/update/account/address_update/DataMappingRows.json","Account");
+
+    BulkWriterInput bulkWriterInput = (BulkWriterInput) result.writerMessage;
+    Assertions.assertNotNull(bulkWriterInput.getTransactionId());
+    Assertions.assertTrue(bulkWriterInput.getPods().stream().anyMatch(input -> input.getObjectName().equals("Account")));
+
+    List<WriterInput> writerInputs = bulkWriterInput.getPods().get(0).getWriterInputList();
+    Assertions.assertEquals(1,writerInputs.size());
+
+    WriterInput writerInput = writerInputs.get(0);
+    Assertions.assertTrue(writerInput.getFields().stream().anyMatch(field -> field.getName().equals(DynamicsConstants.CITY) && field.getNewValue().equals("Sunnyvale")));
+    Assertions.assertTrue(writerInput.getFields().stream().anyMatch(field -> field.getName().equals(DynamicsConstants.COUNTRY) && field.getNewValue().equals("United States")));
+  }
+
+  private MockTestResult getValuesSentToSalesloft(String eventPath, String dataRowsPath, String object) throws IOException {
+    String eventJson = new String(Files.readAllBytes(Paths
+        .get(eventPath)),
+        StandardCharsets.UTF_8);
+
+    String dataRowsJson = new String(Files.
+        readAllBytes(Paths.get(dataRowsPath)),
+        StandardCharsets.UTF_8);
+
+    TypeReference<List<DataMappingRow>> typeReferenceDataMappingRows =
+        new TypeReference<List<DataMappingRow>>() {};
+
+    List<DataMappingRow> dataRows = mapper
+        .readValue(dataRowsJson,typeReferenceDataMappingRows);
+
+    doReturn(dataRows).when(_dataMappingRepo).findByDynamicsIdAndObject(any(),any());
+    ArgumentCaptor<WriterMessage> writerInputArgumentCaptor =
+        ArgumentCaptor.forClass(WriterMessage.class);
+    ArgumentCaptor<String> queueNameCapture = ArgumentCaptor.forClass(String.class);
+
+    DynamicsDeltaHandler platformEventHandler = new DynamicsDeltaHandler(
+        dtoSLObjects,
+        objectFieldSetMap,
+        dynamicsEnumMap,
+        objectFieldSetMapRow,
+        _telemetryClient,
+        _dataMappingRepo,
+        _messageClient,
+        _leadService,
+        _personService,
+        _ownerService,
+        _dataService);
+
+    platformEventHandler.handleMessage(eventJson);
+    Mockito.verify(_messageClient).sendMessage(writerInputArgumentCaptor.capture());
+    Set<String> universalIds = dataRows.stream().map(DataMappingRow::getUniversalId).collect(Collectors.toSet());
+    Set<String> objectIds = dataRows.stream().map(DataMappingRow::getSalesloftId).collect(Collectors.toSet());
+
+    Set<String> fields = objectFieldSetMap
+        .keySet()
+        .stream()
+        .filter(objectKey -> objectKey.getObjectName().equalsIgnoreCase(object))
+        .map(objectKey -> objectFieldSetMap.get(objectKey).iterator().next())
+        .map(ObjectField::getObjectField)
+        .collect(Collectors.toSet());
+
+    return new MockTestResult(writerInputArgumentCaptor.getValue(),universalIds,fields,objectIds);
+  }
+
+  private WriterMessage getChangesSentToSQL(String eventPath, String dataRowsPath, String object) throws IOException {
+    String eventJson = new String(Files.readAllBytes(Paths
+        .get(eventPath)),
+        StandardCharsets.UTF_8);
+
+    String dataRowsJson = new String(Files.
+        readAllBytes(Paths.get(dataRowsPath)),
+        StandardCharsets.UTF_8);
+
+    TypeReference<List<DataMappingRow>> typeReferenceDataMappingRows =
+        new TypeReference<List<DataMappingRow>>() {};
+
+    List<DataMappingRow> dataRows = mapper
+        .readValue(dataRowsJson,typeReferenceDataMappingRows);
+
+    doReturn(dataRows).when(_dataMappingRepo).findByDynamicsIdAndObject(any(),any());
+    ArgumentCaptor<WriterMessage> writerInputArgumentCaptor =
+        ArgumentCaptor.forClass(WriterMessage.class);
+    ArgumentCaptor<String> queueNameCapture = ArgumentCaptor.forClass(String.class);
+
+    DynamicsDeltaHandler platformEventHandler = new DynamicsDeltaHandler(
+        dtoSLObjects,
+        objectFieldSetMap,
+        dynamicsEnumMap,
+        objectFieldSetMapRow,
+        _telemetryClient,
+        _dataMappingRepo,
+        _messageClient,
+        _leadService,
+        _personService,
+        _ownerService,
+        _dataService);
+
+    platformEventHandler.handleMessage(eventJson);
+
+      Mockito
+          .verify(_messageClient)
+          .sendMessage(writerInputArgumentCaptor.capture());
+
+    return writerInputArgumentCaptor.getValue();
+  }
+
+  private DataMappingRow getSavedRowFromDelete(String eventPath, String dataRowsPath, boolean databaseDelete) throws IOException {
+    String eventJson = new String(Files.readAllBytes(Paths
+        .get(eventPath)),
+        StandardCharsets.UTF_8);
+
+    String dataRowsJson = new String(Files.
+        readAllBytes(Paths.get(dataRowsPath)),
+        StandardCharsets.UTF_8);
+
+    TypeReference<List<DataMappingRow>> typeReferenceDataMappingRows = new TypeReference<>() {};
+
+    List<DataMappingRow> dataRows = mapper
+        .readValue(dataRowsJson,typeReferenceDataMappingRows);
+    doReturn(dataRows).when(_dataMappingRepo).findByDynamicsIdAndObject(any(),any());
+
+    DynamicsDeltaHandler platformEventHandler = new DynamicsDeltaHandler(
+        dtoSLObjects,
+        objectFieldSetMap,
+        dynamicsEnumMap,
+        objectFieldSetMapRow,
+        _telemetryClient,
+        _dataMappingRepo,
+        _messageClient,
+        _leadService,
+        _personService,
+        _ownerService,
+        _dataService);
+
+    platformEventHandler.handleMessage(eventJson);
+
+    ArgumentCaptor<DataMappingRow> dataMappingRowCaptor =
+        ArgumentCaptor.forClass(DataMappingRow.class);
+
+    Mockito.verify(_dataService).removeDynamicsReference(dataMappingRowCaptor.capture(),any());
+    return dataMappingRowCaptor.getValue();
+  }
+}
