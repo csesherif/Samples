@@ -1,0 +1,22 @@
+package com.sample.utils.models.api;
+
+import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.sample.utils.models.SObject;
+import java.util.List;
+import lombok.Data;
+import lombok.ToString;
+
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+@ToString
+@Data
+public class QueryResult<T extends SObject> {
+
+  private int totalSize;
+  @JsonProperty("value")
+  @JsonAlias(value = {"Responses", "Values", "records"})
+  private List<T> records;
+  private String nextRecordsUrl;
+}
