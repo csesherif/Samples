@@ -1,0 +1,333 @@
+package com.sample.epe.services.Internal;
+
+import com.sample.epe.constants.DynamicsConstants;
+import com.sample.epe.constants.GeneralConstants;
+import com.sample.epe.models.enums.Action;
+import com.sample.epe.models.enums.CRMObject;
+import com.sample.epe.models.enums.Operation;
+import com.sample.epe.models.enums.SystemName;
+import com.sample.epe.models.input.CaptureInData;
+import com.sample.epe.models.input.FieldChange;
+import com.sample.epe.models.internal.DataClause;
+import com.sample.epe.models.internal.DataDetail;
+import com.sample.epe.models.internal.DataFilter;
+import com.sample.epe.models.internal.MultiDataFilter;
+import com.sample.epe.models.output.Pod;
+import com.sample.epe.models.output.UpdateField;
+import com.sample.epe.models.output.WriterInput;
+import com.sample.epe.models.sql.DataMappingRow;
+import com.sample.epe.services.upstream.DynamicsService;
+import com.sample.epe.util.MessageHelper;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import org.apache.commons.lang3.StringUtils;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+
+import static com.sample.epe.constants.DynamicsConstants.*;
+import static com.sample.epe.models.enums.CRMFields.*;
+import static com.sample.epe.models.enums.CRMObject.*;
+import static com.sample.epe.models.enums.FieldType.*;
+import static com.sample.epe.models.enums.LogicalOperation.*;
+import static com.sample.epe.models.enums.Operation.*;
+import static com.sample.epe.util.MessageHelper.*;
+
+
+@Service
+/**
+ *  As of now we pull all data from Dynamics
+ * TODO: In the future take in source system as an input for which CRM to pull data from
+ */
+public class OutputMessageService {
+
+  private MappingService _mappingService;
+  private DynamicsService _dynamicsService;
+  private DataService _dataService;
+  private Logger _logger = LoggerFactory.getLogger(OutputMessageService.class);
+
+  public OutputMessageService(MappingService mappingService, DynamicsService dynamicsService, DataService dataService){
+    _mappingService = mappingService;
+    _dynamicsService = dynamicsService;
+    _dataService = dataService;
+  }
+
+  public List<UpdateField> convertToUpdateFields(JSONObject jsonObject, SystemName sourceSystem, SystemName targetSystem, String sourceObject, List<String> sourceFields){
+    List<UpdateField> updateFields = new ArrayList<>();
+    sourceFields.forEach(sourceField -> {
+      String sourceValue = jsonObject.optString(sourceField);
+      if(StringUtils.isBlank(sourceValue)) {
+        _logger.error("Could not find value for field: {} on object: {}",sourceField,sourceObject);
+        return;
+      }
+      List<DataDetail> dataDetails = _mappingService.getValueEquivalent(sourceSystem, sourceObject,sourceField,sourceValue,targetSystem);
+      List<UpdateField> updateFieldList = MessageHelper.dataDetailToUpdateField(dataDetails);
+      updateFields.addAll(updateFieldList);
+    });
+    return updateFields;
+  }
+
+  public List<UpdateField> convertToUpdateFields(CaptureInData captureInData, SystemName sinkSystem){
+    List<UpdateField> updateFields = new ArrayList<>();
+
+    SystemName sourceSystem = captureInData.getSourceSystem();
+    String sourceObject = captureInData.getSourceObjectName();
+    captureInData.getFields().forEach(fieldChange -> {
+      String sourceKey = fieldChange.getName();
+      String sourceValue = fieldChange.getNewValue();
+
+      List<DataDetail> dataDetails = _mappingService
+          .getValueEquivalent(sourceSystem,
+              sourceObject,
+              sourceKey,
+              sourceValue,
+              sinkSystem);
+      if(dataDetails.isEmpty()){
+        _logger.info("Not syncing the field:{} on object: {} on system: {} because it is not mapped",
+            sourceKey,sourceObject,sourceSystem);
+      } else {
+        dataDetails.forEach(dataDetail -> {
+
+          UpdateField updateField = new UpdateField(dataDetail.getKey(),dataDetail.getValue(),dataDetail.isCustomField(),
+              dataDetail.getFieldType());
+          updateFields.add(updateField);
+        });
+      }
+    });
+    return updateFields;
+  }
+
+  public String getOGId(JSONObject jsonObject, SystemName systemName, String objectName){
+      String idFieldName = null;
+    CRMObject crmObject = CRMObject.fromString(objectName);
+      switch (crmObject){
+        case ACCOUNT:
+          idFieldName = _mappingService.getAccountIdFieldName(systemName,objectName);
+          break;
+        case CONTACT:
+          idFieldName = _mappingService.getContactIdFieldName(systemName,objectName);
+          break;
+        case OPPORTUNITY:
+          idFieldName = _mappingService.getOpportunityIdFieldName(systemName,objectName);
+          break;
+        case PHONE_CALL:
+        case EMAIL:
+        case APPOINTMENT:
+          idFieldName = DynamicsConstants.ACTIVITY_ID;
+      }
+
+      if(idFieldName == null)
+        return null;
+
+      return jsonObject.optString(idFieldName);
+  }
+
+  public String getAccountId(CaptureInData captureInData){
+    SystemName sourceSystem = captureInData.getSourceSystem();
+    String sourceObject = captureInData.getSourceObjectName();
+    String accountIdFieldName = _mappingService.getAccountIdFieldName(sourceSystem, sourceObject);
+    return captureInData.getFields()
+        .stream()
+        .map(FieldChange::getName)
+        .filter(fieldChange -> fieldChange.equals(accountIdFieldName))
+        .findAny().orElse(null);
+  }
+
+
+  public Pod createProductIntegrationInterest(SystemName sourceSystem, SystemName sinkSystem, String ownerId, List<Pod> activityPods){
+    String sourceObject = PRODUCT_INTEGRATION_INTEREST.getValue();
+    String sinkObject = _mappingService.getUniqueObjectEquivalent(sourceSystem, sinkSystem, sourceObject);
+
+    List<String> phoneCallIds = getOGIdsFromMixedPods(activityPods,PHONE_CALL);
+    List<String> emailIds = getOGIdsFromMixedPods(activityPods, EMAIL);
+    List<String> appointmentIds = getOGIdsFromMixedPods(activityPods,APPOINTMENT);
+
+    phoneCallIds = _dataService.querySyncedDynamicsIds(phoneCallIds);
+    emailIds = _dataService.querySyncedDynamicsIds(emailIds);
+    appointmentIds = _dataService.querySyncedDynamicsIds(appointmentIds);
+
+    DataFilter phoneCallFilter = new DataFilter(PHONE_CALL.getValue(),phoneCallIds,STRING,IN);
+    DataFilter emailCallFilter = new DataFilter(EMAIL.getValue(),emailIds,STRING,IN);
+    DataFilter appointmentCallFilter = new DataFilter(APPOINTMENT.getValue(),appointmentIds,STRING,IN);
+    DataFilter ownerIdFilter = new DataFilter(OWNER_ID.getValue(),Collections.singletonList(ownerId),STRING,EQUALS);
+
+    DataClause phoneEmailApptClause = createDataClause(OR,phoneCallFilter,emailCallFilter,appointmentCallFilter);
+    DataClause ownerIdClause = createDataClause(SINGLE,ownerIdFilter);
+
+    if(ownerIdClause == null || phoneEmailApptClause == null){
+      _logger.info("Not able to obtain filter for ownerId or for one of the three: Phone, Email, Appointment");
+      return null;
+    }
+
+    MultiDataFilter multiDataFilter = new MultiDataFilter(Arrays.asList(ownerIdClause,phoneEmailApptClause),Collections.singletonList(AND));
+    return createPod(sourceSystem,sinkSystem, sourceObject,multiDataFilter);
+  }
+
+  public Pod createOppContactRolePod(SystemName sourceSystem, SystemName sinkSystem, List<String> contactIds, List<String> opportunityIds) {
+    if (contactIds.isEmpty() || opportunityIds.isEmpty()){
+      _logger.info("Cannot sync Opportunity Contact Role because either contacts or opportunity Ids were missing from Account");
+      return null;
+    }
+
+     String sourceObject = OPPORTUNITY_CONTACT_ROLE.getValue();
+     String sinkObject = _mappingService.getUniqueObjectEquivalent(sourceSystem, sinkSystem, OPPORTUNITY_CONTACT_ROLE.getValue());
+
+    String contactFieldName = _mappingService.getContactIdFieldName(sourceSystem,sourceObject);
+    String oppFieldName = _mappingService.getOpportunityIdFieldName(sourceSystem,sourceObject);
+
+    DataFilter contactFilter = new DataFilter(contactFieldName,contactIds, STRING, IN);
+    DataFilter oppFilter = new DataFilter(oppFieldName,opportunityIds, STRING, IN);
+
+    return createPod(sourceSystem,sinkSystem,sourceObject, Arrays.asList(contactFilter,oppFilter));
+  }
+
+  public List<Pod> createActivityPod(CaptureInData captureInData, SystemName sinkSystem, List<String> contactIds, List<String> oppIds, String ownerId){
+
+    String accountId = getAccountId(captureInData);
+    Optional<DataMappingRow> accountRow = _dataService.queryByDynamicsId(accountId);
+    List<String> allIds = Stream.of(contactIds,oppIds).flatMap(Collection::stream).collect(Collectors.toList());
+    SystemName sourceSystem = captureInData.getSourceSystem();
+
+    //Check if no OwnerId or no (Opp, Contact or Account) then return
+
+    if(accountRow.isPresent()){
+      allIds.add(accountId);
+    }
+
+    DataFilter regardingObjectId = new DataFilter(REGARDING_OBJECT_ID.getValue(),allIds, STRING,IN);
+    DataFilter ownerIdFilter = new DataFilter(OWNER_ID.getValue(),Collections.singletonList(ownerId),STRING,EQUALS);
+    List<Pod> activityPods = new ArrayList<>();
+
+    ACTIVITY_TYPES.forEach(sourceObject -> {
+      String sinkObject = _mappingService.getUniqueObjectEquivalent(sourceSystem,sinkSystem,sourceObject);
+      Pod pod = createPod(sourceSystem, sinkSystem,sourceObject,Arrays.asList(regardingObjectId,ownerIdFilter));
+      if(pod != null){
+        activityPods.add(pod);
+      } else {
+        _logger.info("No pod for: {} found",sourceObject);
+      }
+    });
+
+    return activityPods;
+  }
+
+  public Pod createContactPod(CaptureInData captureInData, SystemName sinkSystem) {
+    //Todo: Switch order of data filters so it can be name operation value in the constructor
+    DataFilter dataFilter = new DataFilter(BUSINESS_REASON.getValue(), Collections.singletonList(GeneralConstants.LEARNING), STRING, CONTAINS);
+    return createPodByAccountId(captureInData, sinkSystem, CONTACT.getValue(), Collections.singletonList(dataFilter));
+  }
+
+  public Pod createOpportunityPod(CaptureInData captureInData, SystemName sinkSystem) {
+    DataFilter dataFilter = new DataFilter(STAGE.getValue(), Collections.singletonList(CLOSED_DISENGAGED), STRING, NOT_EQUALS);
+    return createPodByAccountId(captureInData, sinkSystem, OPPORTUNITY.getValue(), Collections.singletonList(dataFilter));
+  }
+
+  public Pod createPodByAccountId(CaptureInData captureInData, SystemName sinkSystem, String sourceObject) {
+    return createPodByAccountId(captureInData,sinkSystem, sourceObject, new ArrayList<>());
+  }
+  //If you want to add extra filters
+  public Pod createPodByAccountId(CaptureInData captureInData, SystemName sinkSystem, String sourceObject, List<DataFilter> dataFilters) {
+    if (dataFilters == null) {
+      dataFilters = new ArrayList<>();
+    }
+
+    final SystemName sourceSystem = captureInData.getSourceSystem();
+    final String sinkObject = _mappingService.getUniqueObjectEquivalent(sourceSystem, sinkSystem, sourceObject);
+
+    //Get the accountId key=value on the source system to query
+    DataFilter accountIdFilter = getAccountIdFilter(sourceSystem, sourceObject, captureInData);
+    if (accountIdFilter == null) {
+      _logger.error("Could not obtain account Id");
+      return null;
+    }
+    dataFilters.add(accountIdFilter);
+
+    return createPod(sourceSystem, sinkSystem, sourceObject, dataFilters);
+  }
+
+  public Pod createPodByAccountId(SystemName sourceSystem, SystemName sinkSystem, String accountObjectName, String accountId) {
+    String accountIdKey = _mappingService.getAccountIdFieldName(sourceSystem,accountObjectName);
+    if(accountIdKey == null) {
+      _logger.error("The value of accountId on account was returned null from mapping service");
+      return null;
+    }
+    DataFilter dataFilter = new DataFilter(accountObjectName, Collections.singletonList(accountId), STRING,EQUALS);
+    return createPod(sourceSystem, sinkSystem, accountObjectName, Collections.singletonList(dataFilter));
+  }
+
+  public Pod createPod(SystemName sourceSystem, SystemName sinkSystem, String sourceObject, List<DataFilter> dataFilters) {
+    //TODO: Add support for SFDC in the future, Wrap Dynamics and SFDC Service in a CRMService that will abstract querying
+    List<String> sourceFields = _mappingService.getFieldList(sourceSystem, sinkSystem, sourceObject);
+    Optional<JSONArray> objectArray = _dynamicsService.query(dataFilters, sourceFields, sourceObject);
+    return createPod(sourceSystem, sinkSystem, sourceObject,objectArray);
+  }
+
+  public Pod createPod(SystemName sourceSystem, SystemName sinkSystem, String sourceObject, MultiDataFilter multiDataFilter) {
+    //TODO: Add support for SFDC in the future, Wrap Dynamics and SFDC Service in a CRMService that will abstract querying
+    List<String> sourceFields = _mappingService.getFieldList(sourceSystem, sinkSystem, sourceObject);
+    Optional<JSONArray> objectArray = _dynamicsService.query(multiDataFilter, sourceFields, sourceObject);
+    return createPod(sourceSystem,sinkSystem,sourceObject, objectArray);
+  }
+
+  public Pod createPod(SystemName sourceSystem, SystemName sinkSystem, String sourceObject, Optional<JSONArray> objectArray) {
+    //Get fields on source object for Account External Solutions so we can query them from Dynamics
+    List<String> sourceFields = _mappingService.getFieldList(sourceSystem, sinkSystem, sourceObject);
+    if (!objectArray.isPresent()) {
+      _logger.info("Not objects found for object: {}", sourceObject);
+      return null;
+    }
+    String sinkObject = _mappingService.getUniqueObjectEquivalent(sourceSystem,sinkSystem,sourceObject);
+
+    Pod pod = new Pod();
+    pod.setObjectName(sinkObject);
+    pod.setSystemName(sinkSystem);
+    List<WriterInput> writerInputs = new ArrayList<>();
+
+    for (int i = 0; i < objectArray.get().length(); i++) {
+      JSONObject jsonObject = objectArray.get().getJSONObject(i);
+      _logger.info("Converting the following Dynamics object of type:{} with string value:{}", sourceObject, jsonObject);
+      String originalObjectId = getOGId(jsonObject, sourceSystem, sourceObject);
+      if (originalObjectId == null) {
+        _logger.info("No original object Id found for source object: {}", sourceObject);
+      }
+      //Convert the returned query from Dynamics
+      List<UpdateField> updateFieldList = convertToUpdateFields(jsonObject, sourceSystem, sinkSystem, sourceObject, sourceFields);
+      writerInputs.add(new WriterInput() {{
+        setAction(Action.CREATE);
+        setOriginalObjectName(sourceObject);
+        setOriginalObjectId(originalObjectId);
+        setObjectName(sinkObject);
+        setAction(Action.CREATE);
+        setTransactionRecordId(UUID.randomUUID().toString());
+        setSourceSystem(sourceSystem);
+        setSinkSystem(sinkSystem);
+        setFields(updateFieldList);
+      }});
+    }
+
+    pod.setWriterInputList(writerInputs);
+    return pod;
+  }
+
+  public DataFilter getAccountIdFilter(SystemName sourceSystem, String sourceObject, CaptureInData captureInData) {
+    String accountIdFieldName = _mappingService.getAccountIdFieldName(sourceSystem, sourceObject);
+    String accountId = getAccountId(captureInData);
+
+    if (accountId == null) {
+      _logger.error("Could not obtain account Id from related objects in capture in message");
+      return null;
+    }
+
+    return new DataFilter(accountIdFieldName, Collections.singletonList(accountId), STRING, Operation.EQUALS);
+  }
+
+}
